@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>retro-qd3d studio — QuickDraw 3D Movie Maker remake</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: Chicago, Charcoal, Geneva, Verdana, sans-serif; margin: 0; padding: 16px;
+         background: #c0c0c0; color: #111; }
+  @media (prefers-color-scheme: dark) { body { background: #222; color: #eee; } }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { font-size: 12px; opacity: .75; margin-bottom: 12px; }
+  .wrap { display: flex; gap: 16px; flex-wrap: wrap; }
+  .panel { background: #efefef; border: 2px outset #fff; padding: 12px; width: 340px; }
+  @media (prefers-color-scheme: dark) { .panel { background: #333; border-color: #555; } }
+  .panel h2 { font-size: 13px; margin: 14px 0 6px; border-bottom: 1px solid #999; padding-bottom: 2px; }
+  .panel h2:first-child { margin-top: 0; }
+  .models { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .models button { padding: 10px 4px; cursor: pointer; font-size: 12px; }
+  .models button.sel { outline: 3px solid #0000cc; }
+  .slot { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 12px; }
+  .slot img { width: 40px; height: 40px; object-fit: cover; image-rendering: pixelated;
+              border: 1px solid #666; background: #999; }
+  .stage { flex: 1; min-width: 300px; }
+  canvas#view { width: 100%; max-width: 640px; border: 2px inset #fff; background: #008080;
+                image-rendering: pixelated; cursor: grab; display: block; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; flex-wrap: wrap; }
+  label { font-size: 13px; }
+  textarea#embed { width: 100%; height: 120px; font-family: monospace; font-size: 11px; }
+  button.act { padding: 8px 10px; cursor: pointer; font-weight: bold; }
+  .hint { font-size: 11px; opacity: .8; }
+  input[type=file] { font-size: 11px; max-width: 200px; }
+</style>
+</head>
+<body>
+<div id="err" style="display:none;background:#aa0000;color:#fff;padding:8px;font:12px monospace;white-space:pre-wrap"></div>
+<h1>◈ retro-qd3d studio</h1>
+<div class="sub">A modern remake of Apple's <b>3D Movie Maker v1.0 (1998)</b> —
+pick a low-poly model → slap your own photos on it → pick a spin → export a looping
+embed for Neocities. Everything stays in your browser. Drag on the preview to rotate.</div>
+
+<div class="wrap">
+  <div class="panel">
+    <h2>1 · Model Select <span class="hint">(orig: click a model / drop a .3df — here: click / drop .obj)</span></h2>
+    <div class="models" id="modelBtns"></div>
+    <div class="row"><input type="file" id="objFile" accept=".obj,.txt"></div>
+
+    <h2>2 · Textures <span class="hint">(orig: drop PICT on a part — here: pick a slot, upload a photo; auto 16-bit + power-of-2)</span></h2>
+    <div id="slots"></div>
+
+    <h2>3 · Animation <span class="hint">(orig: 4 choices — same 4 here)</span></h2>
+    <div class="row" id="anims">
+      <label><input type="radio" name="anim" value="y" checked> Spin Y</label>
+      <label><input type="radio" name="anim" value="x"> Spin X</label>
+      <label><input type="radio" name="anim" value="z"> Spin Z</label>
+      <label><input type="radio" name="anim" value="none"> Still</label>
+    </div>
+
+    <h2>4 · Movie options → Export <span class="hint">(orig: size/compression/bg → .mov)</span></h2>
+    <div class="row">
+      <label>Size <input type="number" id="outW" value="320" min="64" max="960" step="16" style="width:64px">×<input type="number" id="outH" value="240" min="64" max="720" step="16" style="width:64px"></label>
+    </div>
+    <div class="row">
+      <label>Pixelation <input type="range" id="pix" min="1" max="8" value="2"> <span id="pixV">2×</span></label>
+    </div>
+    <div class="row">
+      <label>Background <input type="color" id="bg" value="#008080"></label>
+      <label>Speed <input type="range" id="spd" min="10" max="180" value="60"> <span id="spdV">60°/s</span></label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="loopChk" checked> LOOP the 360° turn</label>
+      <button id="bReplay" title="Restart the turn from 0°">↻ Replay</button>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="twoSided"> Two-sided faces (QD3D backface cull off)</label>
+    </div>
+    <div class="row">
+      <button class="act" id="bEmbed">⧉ Build Neocities embed</button>
+      <button class="act" id="bPng">▣ PNG frame</button>
+      <button class="act" id="bWebm">◉ Record 1 loop (WebM)</button>
+    </div>
+    <div class="row">
+      <button id="bVTag">⧉ Copy &lt;video&gt; tag for Neocities</button>
+      <button id="bSelf" title="Save this exact studio as one file that works with no internet">⧉ Save offline studio .html</button>
+    </div>
+
+    <h2>5 · Shape <span class="hint">(resize the model — width / height / thickness)</span></h2>
+    <div class="row"><label>Width <input type="range" id="scX" min="10" max="200" value="100"> <span id="scXV">100%</span></label></div>
+    <div class="row"><label>Height <input type="range" id="scY" min="10" max="200" value="100"> <span id="scYV">100%</span></label></div>
+    <div class="row"><label>Thickness <input type="range" id="scZ" min="5" max="200" value="100"> <span id="scZV">100%</span></label></div>
+    <div class="row"><button id="bShapeReset">Reset shape</button></div>
+    <textarea id="embed" placeholder="Your self-contained &lt;canvas&gt; embed code appears here — paste it into your Neocities page."></textarea>
+    <div class="row"><button id="bCopy">Copy embed</button><button id="bDl">Download embed .html</button></div>
+    <p class="hint">IRL workflow: photograph something you own (book, CD, box, framed print) in flat
+    light → upload the photo(s) into the matching slots → export. The canvas embed repeats
+    the 360° turn while <b>LOOP</b> is checked; uncheck it to play once (use ↻ Replay to
+    re-watch). For the recorded .webm, looping comes from the <b>loop</b> attribute —
+    use “Copy &lt;video&gt; tag” to get it right.</p>
+  </div>
+
+  <div class="stage">
+    <canvas id="view" width="320" height="240"></canvas>
+    <p class="hint" id="stat"></p>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* Surface failures visibly instead of failing silently. */
+window.addEventListener("error",function(e){
+  var d=document.getElementById("err");if(d){d.style.display="block";
+  d.textContent="Error: "+(e.message||e.error)+" — tell the developer what you clicked.";}
+});
+/* ============================================================
+   retro-qd3d studio — zero-dependency software renderer.
+   Pure functions (projectVerts/drawTexturedTri/drawScene) are
+   reused VERBATIM inside exported embeds via fn.toString().
+   Keep them closure-free (only Math + args).
+   ============================================================ */
+
+// ---- built-in low-poly models (hand-rebuilt equivalents of the
+// ---- original .3df TriMeshes). Every model is watertight (closed solids
+// ---- only) so backface culling never shows through the model. ----
+var SLOT_COLORS = { front:[70,120,200], back:[150,60,60], edges:[180,180,180],
+  frontCover:[190,60,50], backCover:[150,50,45], spine:[120,40,40], pages:[235,230,210],
+  labelA:[70,140,220], labelB:[200,200,220], edge:[200,200,200],
+  photo:[120,170,120], wood:[120,80,40], custom:[170,170,190] };
+function addBox(M, mn, mx, sl){
+  // Merge one closed box into M. sl maps pz/nz/px/nx/py/ny (or all) to texture slots.
+  function S(k){ return sl[k]||sl.all||"custom"; }
+  function C(k){ return SLOT_COLORS[S(k)]||SLOT_COLORS.custom; }
+  var x0=mn[0],y0=mn[1],z0=mn[2],x1=mx[0],y1=mx[1],z1=mx[2],b=M.verts.length;
+  M.verts.push([x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],
+               [x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]);
+  function F(v,key){ M.faces.push({v:v.map(function(i){return i+b;}),slot:S(key),c:C(key)}); }
+  // windings: consistently outward (right-hand rule), so normal-based culling is exact
+  F([0,3,2,1],"nz"); F([4,5,6,7],"pz");
+  F([0,1,5,4],"ny"); F([3,7,6,2],"py");
+  F([0,4,7,3],"nx"); F([1,2,6,5],"px");
+}
+var MODELS = {
+  box: { label: "Software Box", verts: [
+    [-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],
+    [-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]],
+    faces: [
+      { v:[0,3,2,1], slot:"back",  c:[150,60,60]  },
+      { v:[4,5,6,7], slot:"front", c:[70,120,200] },
+      { v:[0,1,5,4], slot:"edges", c:[180,180,180]},
+      { v:[2,3,7,6], slot:"edges", c:[180,180,180]},
+      { v:[1,2,6,5], slot:"edges", c:[160,160,160]},
+      { v:[0,4,7,3], slot:"edges", c:[160,160,160]} ] },
+  book: (function(){ var M={label:"Hardcover Book",verts:[],faces:[]};
+      // back board / page block / front board / spine; slight overlaps, no gaps
+      addBox(M,[-1.1,-1.4,-0.28],[1.1,1.4,-0.19],{nz:"backCover",all:"spine"});
+      addBox(M,[-1.0,-1.3,-0.20],[1.04,1.3,0.21],{all:"pages"});
+      addBox(M,[-1.1,-1.4,0.19],[1.1,1.4,0.28],{pz:"frontCover",all:"spine"});
+      addBox(M,[-1.1,-1.4,-0.28],[-0.99,1.4,0.28],{nx:"spine",all:"spine"});
+      return M; })(),
+  cd: (function(){ var M={label:"Compact Disc",verts:[],faces:[]},i,a;
+      // closed solid: outer wall + inner (hole) wall + full annular caps, 16 segs
+      function ring(r,z){var p=[];for(var k=0;k<16;k++){var t=k/16*2*Math.PI;
+        M.verts.push([r*Math.cos(t),r*Math.sin(t),z]);p.push(M.verts.length-1);}return p;}
+      var T=ring(1,0.02),B=ring(1,-0.02),Ht=ring(0.32,0.02),Hb=ring(0.32,-0.02);
+      function F(v,slot){M.faces.push({v:v,slot:slot,c:SLOT_COLORS[slot]});}
+      for(i=0;i<16;i++){var j=(i+1)%16;
+        F([T[j],T[i],B[i],B[j]],"edge");
+        F([Ht[i],Ht[j],Hb[j],Hb[i]],"edge");
+        F([T[i],T[j],Ht[j],Ht[i]],"labelA");
+        F([B[j],B[i],Hb[i],Hb[j]],"labelB");}
+      return M; })(),
+  frame: (function(){ var M={label:"Picture Frame",verts:[],faces:[]};
+      // back board + 4 rails + recessed photo plate; all closed boxes
+      addBox(M,[-1.4,-1.1,-0.12],[1.4,1.1,-0.03],{all:"wood"});
+      addBox(M,[-1.4,-1.1,-0.04],[1.4,-0.75,0.12],{all:"wood"});
+      addBox(M,[-1.4,0.75,-0.04],[1.4,1.1,0.12],{all:"wood"});
+      addBox(M,[-1.4,-0.76,-0.04],[-1.0,0.76,0.12],{all:"wood"});
+      addBox(M,[1.0,-0.76,-0.04],[1.4,0.76,0.12],{all:"wood"});
+      addBox(M,[-1.0,-0.75,-0.04],[1.0,0.75,0.02],{pz:"photo",all:"wood"});
+      return M; })(),
+};
+var SLOT_NAMES = { front:"Front of Box", back:"Back of Box", edges:"Edges of Box",
+  frontCover:"Front Cover", backCover:"Back Cover", spine:"Spine", pages:"Pages (fixed)",
+  labelA:"CD Front Label", labelB:"CD Back Label", edge:"CD Edge (fixed)",
+  photo:"Photo", wood:"Wood (fixed)", custom:"Custom" };
+
+// ---- state ----
+var state = { model:"box", yaw:0.6, pitch:-0.35, spin:0, textures:{}, texURL:{},
+  scale:{x:1,y:1,z:1} };
+
+// ---- pure 3D core (must stay closure-free!) ----
+function projectVerts(verts, yaw, pitch, spin, axis, w, h, kx, ky, kz){
+  if(kx===undefined){kx=1;ky=1;kz=1;} // old embeds omit this: unit scale
+  var cy=Math.cos(yaw),sy=Math.sin(yaw),cx=Math.cos(pitch),sx_=Math.sin(pitch);
+  var t=spin,a;
+  var out=[],i,x,y,z,x1,y1,z1;
+  for(i=0;i<verts.length;i++){
+    x=verts[i][0]*kx;y=verts[i][1]*ky;z=verts[i][2]*kz;
+    if(axis==="y"||axis==="none"){a=t;var x0=x*Math.cos(a)+z*Math.sin(a),z0=-x*Math.sin(a)+z*Math.cos(a);x=x0;z=z0;}
+    else if(axis==="x"){a=t;var y0=y*Math.cos(a)-z*Math.sin(a),z2=y*Math.sin(a)+z*Math.cos(a);y=y0;z=z2;}
+    else if(axis==="z"){a=t;var x2=x*Math.cos(a)-y*Math.sin(a),y2=x*Math.sin(a)+y*Math.cos(a);x=x2;y=y2;}
+    x1=x*cy+z*sy; z1=-x*sy+z*cy;
+    y1=y*cx-z1*sx_; z1=y*sx_+z1*cx;
+    var f=3.2/(3.2+z1+2.2), s=Math.min(w,h)*0.42*f;
+    out.push([w/2+x1*s, h/2-y1*s, z1]);
+  }
+  return out;
+}
+function drawTexturedTri(ctx, img, u0,v0,u1,v1,u2,v2, x0,y0,x1,y1,x2,y2, shade){
+  var W=img.width,H=img.height;
+  u0*=W;u1*=W;u2*=W;v0*=H;v1*=H;v2*=H;
+  var du1=u1-u0,du2=u2-u0,dv1=v1-v0,dv2=v2-v0;
+  var det=du1*dv2-du2*dv1;
+  if(det>-0.01&&det<0.01) return;
+  var dx1=x1-x0,dx2=x2-x0,dy1=y1-y0,dy2=y2-y0;
+  var a=(dx1*dv2-dx2*dv1)/det, c=(-dx1*du2+dx2*du1)/det;
+  var b=(dy1*dv2-dy2*dv1)/det, d=(-dy1*du2+dy2*du1)/det;
+  var e=x0-a*u0-c*v0, f=y0-b*u0-d*v0;
+  ctx.save();
+  ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.lineTo(x2,y2);ctx.closePath();ctx.clip();
+  ctx.setTransform(a,b,c,d,e,f);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(img,0,0);
+  ctx.setTransform(1,0,0,1,0,0);
+  if(shade<0.999){
+    ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.lineTo(x2,y2);ctx.closePath();
+    ctx.fillStyle="rgba(0,0,0,"+(1-shade).toFixed(3)+")";ctx.fill();}
+  ctx.restore();
+}
+function drawScene(ctx, model, texImgs, yaw, pitch, spin, axis, w, h, bg, cull, sc){
+  if(cull===undefined)cull=1; // old embeds omit this: default = solid, like QD3D
+  if(sc===undefined)sc=[1,1,1]; // old embeds omit this: unit scale
+  var cy=Math.cos(yaw),sy=Math.sin(yaw),cx=Math.cos(pitch),sx=Math.sin(pitch);
+  var P=projectVerts(model.verts,yaw,pitch,spin,axis,w,h,sc[0],sc[1],sc[2]);
+  var items=[],i,f,p0,p1,p2,p3,nx,ny,nz,nl,sh,z;
+  for(i=0;i<model.faces.length;i++){
+    f=model.faces[i];
+    p0=P[f.v[0]];p1=P[f.v[1]];p2=P[f.v[2]];p3=f.v[3]!==undefined?P[f.v[3]]:null;
+    // outward face normal (windings are consistently outward), rotated like the verts
+    var A=model.verts[f.v[0]],B=model.verts[f.v[1]],C=model.verts[f.v[2]];
+    var e1=[B[0]-A[0],B[1]-A[1],B[2]-A[2]],e2=[C[0]-A[0],C[1]-A[1],C[2]-A[2]];
+    nx=e1[1]*e2[2]-e1[2]*e2[1];ny=e1[2]*e2[0]-e1[0]*e2[2];nz=e1[0]*e2[1]-e1[1]*e2[0];
+    if(sc[0]!==1||sc[1]!==1||sc[2]!==1){nx/=sc[0];ny/=sc[1];nz/=sc[2];} // inverse-scale normals
+    var t=spin,a,ox=nx,oy=ny,oz=nz;
+    if(axis==="y"||axis==="none"){a=t;nx=ox*Math.cos(a)+oz*Math.sin(a);nz=-ox*Math.sin(a)+oz*Math.cos(a);}
+    else if(axis==="x"){a=t;ny=oy*Math.cos(a)-oz*Math.sin(a);nz=oy*Math.sin(a)+oz*Math.cos(a);}
+    else if(axis==="z"){a=t;nx=ox*Math.cos(a)-oy*Math.sin(a);ny=ox*Math.sin(a)+oy*Math.cos(a);}
+    var wx=nx*cy+nz*sy,wz=-nx*sy+nz*cy,wy=ny*cx-wz*sx;wz=ny*sx+wz*cx;
+    if(cull&&wz>=0) continue; // camera looks +z: keep only faces pointing at it
+    nl=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+    // fixed studio light, in view space (normals rotate with the model, like QD3D)
+    var lx=-0.45,ly=-0.65,lz=-0.62,ll=Math.sqrt(lx*lx+ly*ly+lz*lz);
+    sh=0.55+0.45*Math.abs((nx*lx+ny*ly+nz*lz)/(nl*ll));
+    if(sh>1)sh=1;
+    z=(p0[2]+p1[2]+p2[2]+(p3?p3[2]:p0[2]))/(p3?4:3);
+    items.push({f:f,p0:p0,p1:p1,p2:p2,p3:p3,sh:sh,z:z});
+  }
+  items.sort(function(m,n){return n.z-m.z;});
+  ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+  ctx.imageSmoothingEnabled=false;
+  for(i=0;i<items.length;i++){
+    var it=items[i],fc=it.f,img=texImgs[fc.slot];
+    if(img&&img.width>1){
+      if(it.p3){ // quad -> two tris, planar UVs (0,0)(1,0)(1,1)(0,1)
+        drawTexturedTri(ctx,img, 0,0, 1,0, 1,1, it.p0[0],it.p0[1],it.p1[0],it.p1[1],it.p2[0],it.p2[1], it.sh);
+        drawTexturedTri(ctx,img, 0,0, 1,1, 0,1, it.p0[0],it.p0[1],it.p2[0],it.p2[1],it.p3[0],it.p3[1], it.sh);
+      } else {
+        drawTexturedTri(ctx,img, 0,0, 1,0, 0.5,1, it.p0[0],it.p0[1],it.p1[0],it.p1[1],it.p2[0],it.p2[1], it.sh);
+      }
+    } else {
+      var r=Math.round(fc.c[0]*it.sh),g=Math.round(fc.c[1]*it.sh),b=Math.round(fc.c[2]*it.sh);
+      ctx.beginPath();
+      ctx.moveTo(it.p0[0],it.p0[1]);ctx.lineTo(it.p1[0],it.p1[1]);ctx.lineTo(it.p2[0],it.p2[1]);
+      if(it.p3)ctx.lineTo(it.p3[0],it.p3[1]);
+      ctx.closePath();ctx.fillStyle="rgb("+r+","+g+","+b+")";ctx.fill();
+      ctx.strokeStyle="rgba(0,0,0,0.25)";ctx.lineWidth=1;ctx.stroke();
+    }
+  }
+}
+
+// ---- retro texture pipeline: power-of-2 + RGB565 quantize ----
+function pow2(n){var p=1;while(p<n)p*=2;return p;}
+function quantizeImage(img, cb){
+  var w=img.width,h=img.height;
+  var tw=Math.min(256,pow2(w)),th=Math.min(256,pow2(h));
+  // shrink-to-fit like QD3D did with NPOT textures
+  if(tw>w)tw/=2; if(th>h)th/=2; if(tw<8)tw=8; if(th<8)th=8;
+  var c=document.createElement("canvas");c.width=tw;c.height=th;
+  var x=c.getContext("2d");x.imageSmoothingEnabled=false;
+  x.drawImage(img,0,0,tw,th);
+  var d=x.getImageData(0,0,tw,th),p=d.data,i,r,g,b;
+  for(i=0;i<p.length;i+=4){
+    r=p[i]>>3;g=p[i+1]>>2;b=p[i+2]>>3; // RGB565
+    p[i]=r<<3| r>>2;p[i+1]=g<<2|g>>4;p[i+2]=b<<3|b>>2;
+  }
+  x.putImageData(d,0,0);
+  var out=new Image();
+  out.onload=function(){cb(out,c.toDataURL("image/png"));};
+  out.src=c.toDataURL("image/png");
+}
+function fileToImage(file, cb, errb){
+  if(!/^image\//.test(file.type||"")){
+    (errb||alert)("Not an image file (need PNG or JPG): "+file.name);return;
+  }
+  var rd=new FileReader();
+  rd.onerror=function(){(errb||alert)("Could not read file: "+file.name);};
+  rd.onload=function(){var im=new Image();
+    im.onerror=function(){(errb||alert)("Browser cannot decode this image (PNG/JPG/GIF/WebP work): "+file.name);};
+    im.onload=function(){cb(im);};im.src=rd.result;};
+  rd.readAsDataURL(file);
+}
+function handleSlotFile(file, slot){
+  fileToImage(file,function(im){
+    quantizeImage(im,function(q,url){state.textures[slot]=q;state.texURL[slot]=url;refreshSlots();});
+  },function(msg){stat.textContent=msg;});
+}
+
+// ---- UI ----
+var view=document.getElementById("view"),vctx=view.getContext("2d");
+var low=document.createElement("canvas"),lowCtx=low.getContext("2d");
+var modelBtns=document.getElementById("modelBtns"),slotsDiv=document.getElementById("slots");
+var stat=document.getElementById("stat");
+
+function modelSlots(m){var s=[],seen={};m.faces.forEach(function(f){
+  if(!seen[f.slot]){seen[f.slot]=1;s.push(f.slot);}});return s;}
+function refreshModels(){
+  modelBtns.innerHTML="";
+  Object.keys(MODELS).forEach(function(k){
+    var b=document.createElement("button");
+    b.textContent=MODELS[k].label;
+    if(k===state.model)b.className="sel";
+    b.onclick=function(){state.model=k;state.textures={};state.texURL={};resetShape();refreshModels();refreshSlots();};
+    modelBtns.appendChild(b);
+  });
+}
+function refreshSlots(){
+  slotsDiv.innerHTML="";
+  modelSlots(MODELS[state.model]).forEach(function(s){
+    var div=document.createElement("div");div.className="slot";
+    var th=document.createElement("img");
+    if(state.texURL[s])th.src=state.texURL[s];
+    th.alt="";th.title=state.texURL[s]?"16-bit texture ✓":"flat color";
+    var lab=document.createElement("span");
+    lab.textContent=(SLOT_NAMES[s]||s);lab.style.flex="1";
+    var inp=document.createElement("input");
+    inp.type="file";inp.accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp";
+    inp.title="Upload a PNG or JPG photo for this part (or drag-drop an image onto this row)";
+    inp.onchange=function(){
+      if(!inp.files[0])return;
+      handleSlotFile(inp.files[0],s);
+    };
+    // drag & drop an image file straight onto the slot row (like dropping PICTs in 1998)
+    div.addEventListener("dragover",function(e){e.preventDefault();div.style.outline="2px dashed #0000cc";});
+    div.addEventListener("dragleave",function(){div.style.outline="";});
+    div.addEventListener("drop",function(e){e.preventDefault();div.style.outline="";
+      if(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0])
+        handleSlotFile(e.dataTransfer.files[0],s);});
+    var clr=document.createElement("button");clr.textContent="✕";clr.title="remove texture";
+    clr.onclick=function(){delete state.textures[s];delete state.texURL[s];refreshSlots();};
+    div.appendChild(th);div.appendChild(lab);div.appendChild(inp);div.appendChild(clr);
+    slotsDiv.appendChild(div);
+  });
+  var m=MODELS[state.model],tris=m.faces.reduce(function(n,f){return n+(f.v.length>3?2:1);},0);
+  stat.textContent=m.label+": "+m.verts.length+" verts, "+tris+" tris (orig Box.3df ≈ same order) — drag preview to rotate.";
+}
+document.getElementById("objFile").onchange=function(e){
+  var f=e.target.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    var verts=[],faces=[],lines=String(rd.result).split("\n"),i,p;
+    lines.forEach(function(ln){
+      p=ln.trim().split(/\s+/);
+      if(p[0]==="v")verts.push([+p[1],+p[2],+p[3]]);
+      else if(p[0]==="f"){
+        var idx=p.slice(1).map(function(q){return parseInt(q.split("/")[0],10)-1;});
+        for(i=1;i<idx.length-1;i++)faces.push({v:[idx[0],idx[i],idx[i+1]],slot:"custom",c:[170,170,190]});
+      }
+    });
+    if(!verts.length||!faces.length){alert("No geometry found in OBJ.");return;}
+    // normalize to ~unit size
+    var s=0;verts.forEach(function(v){s=Math.max(s,Math.abs(v[0]),Math.abs(v[1]),Math.abs(v[2]));});
+    if(s>0)verts=verts.map(function(v){return [v[0]/s,v[1]/s,v[2]/s];});
+    MODELS.custom={label:"Custom: "+f.name,verts:verts,faces:faces};
+    state.model="custom";state.textures={};state.texURL={};resetShape();
+    refreshModels();refreshSlots();
+  };
+  rd.readAsText(f);
+};
+
+// drag-to-rotate (mirrors the original Texture screen)
+(function(){
+  var drag=false,lx=0,ly=0;
+  view.addEventListener("pointerdown",function(e){drag=true;lx=e.clientX;ly=e.clientY;view.setPointerCapture(e.pointerId);});
+  view.addEventListener("pointermove",function(e){if(!drag)return;
+    state.yaw+=(e.clientX-lx)*0.01;state.pitch+=(e.clientY-ly)*0.01;
+    state.pitch=Math.max(-1.4,Math.min(1.4,state.pitch));lx=e.clientX;ly=e.clientY;});
+  view.addEventListener("pointerup",function(){drag=false;});
+})();
+
+function animAxis(){var r=document.querySelector('input[name=anim]:checked');return r?r.value:"y";}
+function bindShape(id, key){
+  document.getElementById(id).oninput=function(e){
+    state.scale[key]=e.target.value/100;
+    document.getElementById(id+"V").textContent=e.target.value+"%";
+  };
+}
+bindShape("scX","x");bindShape("scY","y");bindShape("scZ","z");
+function resetShape(){
+  state.scale={x:1,y:1,z:1};
+  [["scX",100],["scY",100],["scZ",100]].forEach(function(p){
+    document.getElementById(p[0]).value=p[1];
+    document.getElementById(p[0]+"V").textContent=p[1]+"%";
+  });
+}
+document.getElementById("bShapeReset").onclick=resetShape;
+document.getElementById("pix").oninput=function(e){document.getElementById("pixV").textContent=e.target.value+"×";};
+document.getElementById("spd").oninput=function(e){document.getElementById("spdV").textContent=e.target.value+"°/s";};
+
+var last=performance.now();
+document.getElementById("bReplay").onclick=function(){state.spin=0;};
+function frame(now){
+  var dt=(now-last)/1000;last=now;
+  var ax=animAxis(),spd=+document.getElementById("spd").value*Math.PI/180;
+  var loopOn=document.getElementById("loopChk").checked;
+  if(ax!=="none"){
+    if(loopOn)state.spin=(state.spin+spd*dt)%(Math.PI*2);
+    else state.spin=Math.min(state.spin+spd*dt,Math.PI*2); // one turn, then hold
+  }
+  var W=+document.getElementById("outW").value||320,H=+document.getElementById("outH").value||240;
+  if(view.width!==W||view.height!==H){view.width=W;view.height=H;}
+  var pix=+document.getElementById("pix").value||2;
+  var cull=document.getElementById("twoSided").checked?0:1;
+  var sc=[state.scale.x,state.scale.y,state.scale.z];
+  low.width=Math.max(32,W/pix);low.height=Math.max(32,H/pix);
+  drawScene(lowCtx,MODELS[state.model],state.textures,state.yaw,state.pitch,state.spin,
+    ax,low.width,low.height,document.getElementById("bg").value,cull,sc);
+  vctx.imageSmoothingEnabled=false;
+  vctx.drawImage(low,0,0,W,H);
+  requestAnimationFrame(frame);
+}
+
+// ---- exporters ----
+function texImgsForEmbed(){
+  var o={};Object.keys(state.texURL).forEach(function(k){o[k]=state.texURL[k];});return o;
+}
+function buildEmbed(){
+  var W=+document.getElementById("outW").value||320,H=+document.getElementById("outH").value||240;
+  var pix=+document.getElementById("pix").value||2;
+  var bg=document.getElementById("bg").value,ax=animAxis(),spd=+document.getElementById("spd").value;
+  var loopOn=document.getElementById("loopChk").checked;
+  var cull=document.getElementById("twoSided").checked?0:1;
+  var boot="var M="+JSON.stringify(MODELS[state.model])+";\n"+
+    "var T="+JSON.stringify(texImgsForEmbed())+";\n"+
+    "var SC=["+state.scale.x+","+state.scale.y+","+state.scale.z+"];\n"+
+    "var LOOP="+loopOn+",CULL="+cull+",RATE="+((ax==="none")?"0":(spd*Math.PI/180).toFixed(4))+";\n"+
+    "var imgs={},n=0,keys=Object.keys(T);\n"+
+    "var cv=document.getElementById('rq'),cx=cv.getContext('2d');\n"+
+    "var lo=document.createElement('canvas');lo.width=Math.max(32,"+W+"/"+pix+");lo.height=Math.max(32,"+H+"/"+pix+");\n"+
+    "var lx=lo.getContext('2d');var yaw=0.6,pitch=-0.35,spin=0,loopDone=false,last=performance.now();\n"+
+    "function fr(now){var dt=(now-last)/1000;last=now;\n"+
+    "if(!loopDone&&RATE>0){spin+=RATE*dt;if(spin>=6.2832){if(LOOP){spin=spin%6.2832;}else{spin=6.2832;loopDone=true;}}}\n"+
+    "drawScene(lx,M,imgs,yaw,pitch,spin,'"+ax+"',lo.width,lo.height,'"+bg+"',CULL,SC);\n"+
+    "cx.imageSmoothingEnabled=false;cx.drawImage(lo,0,0,"+W+","+H+");\n"+
+    "if(LOOP||!loopDone)requestAnimationFrame(fr);}\n"+
+    "if(keys.length===0){requestAnimationFrame(fr);}\n"+
+    "keys.forEach(function(k){var im=new Image();im.onload=function(){n++;if(n===keys.length)requestAnimationFrame(fr);};im.src=T[k];imgs[k]=im;});\n";
+  return "<!-- retro-qd3d embed: "+MODELS[state.model].label+", spin "+ax+
+    " (remake of Apple 3D Movie Maker 1998) -->\n"+
+    '<canvas id="rq" width="'+W+'" height="'+H+'" style="image-rendering:pixelated;max-width:100%"></canvas>\n'+
+    "<script>\n"+projectVerts.toString()+"\n"+drawTexturedTri.toString()+"\n"+drawScene.toString()+"\n"+boot+"<\/script>";
+}
+document.getElementById("bEmbed").onclick=function(){
+  document.getElementById("embed").value=buildEmbed();
+};
+document.getElementById("bCopy").onclick=function(){
+  var t=document.getElementById("embed");t.select();
+  document.execCommand("copy");
+  if(navigator.clipboard)navigator.clipboard.writeText(t.value);
+};
+document.getElementById("bDl").onclick=function(){
+  var W=+document.getElementById("outW").value||320,H=+document.getElementById("outH").value||240;
+  var doc="<!DOCTYPE html><html><head><meta charset='utf-8'><title>retro-qd3d</title></head>"+
+    "<body style='margin:0;background:"+document.getElementById("bg").value+
+    "'>"+buildEmbed()+"</body></html>";
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([doc],{type:"text/html"}));
+  a.download="retro-qd3d-"+state.model+"-"+W+"x"+H+".html";a.click();
+};
+document.getElementById("bPng").onclick=function(){
+  var a=document.createElement("a");
+  a.href=view.toDataURL("image/png");
+  a.download="retro-qd3d-"+state.model+".png";a.click();
+};
+document.getElementById("bSelf").onclick=function(){
+  // the studio is one file with zero dependencies: snapshot it for offline use
+  var doc="<!DOCTYPE html>\n"+document.documentElement.outerHTML;
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([doc],{type:"text/html"}));
+  a.download="retro-qd3d-studio-offline.html";a.click();
+  stat.textContent="Offline copy saved — it runs from file:// with no internet.";
+};
+document.getElementById("bVTag").onclick=function(){
+  // Neocities video embed: the LOOP checkbox maps to the loop attribute
+  // (a .webm file alone plays once; the tag makes it repeat like LOOP=TRUE).
+  var W=+document.getElementById("outW").value||320;
+  var loop=document.getElementById("loopChk").checked?" loop":"";
+  var tag="<!-- upload retro-qd3d-"+state.model+"-loop.webm next to this page, then: -->\n"+
+    '<video src="retro-qd3d-'+state.model+'-loop.webm" width="'+W+'" autoplay muted playsinline'+loop+'>\n'+
+    "  Your browser cannot play this video.\n</video>";
+  document.getElementById("embed").value=tag;
+  stat.textContent="Video tag copied into the box below — "+(loop?"LOOP is ON, it will repeat.":"LOOP is OFF, it plays once.")+" (muted+playsinline let it autoplay.)";
+};
+document.getElementById("bWebm").onclick=function(){
+  var ax=animAxis();
+  if(ax==="none"){alert("Pick a spin animation first (Still exports as PNG).");return;}
+  if(typeof MediaRecorder==="undefined"||!view.captureStream){
+    alert("Video recording is not supported in this browser — use PNG frame or the Neocities embed instead.");return;
+  }
+  var spd=+document.getElementById("spd").value||60;
+  var ms=Math.round(360/spd*1000);
+  var stream=view.captureStream(30);
+  var mime="video/webm";
+  if(MediaRecorder.isTypeSupported&&!MediaRecorder.isTypeSupported(mime))mime="";
+  var rec;
+  try{rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);}
+  catch(err){alert("Could not start recorder: "+err.message);return;}
+  var chunks=[];
+  rec.ondataavailable=function(e){if(e.data.size)chunks.push(e.data);};
+  rec.onstop=function(){
+    var a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob(chunks,{type:"video/webm"}));
+    a.download="retro-qd3d-"+state.model+"-loop.webm";a.click();
+  };
+  // restart the loop from 0 so the recording is exactly one 360° turn
+  state.spin=0;rec.start();
+  stat.textContent="Recording one loop ("+(ms/1000).toFixed(1)+"s)…";
+  setTimeout(function(){rec.stop();stat.textContent="Loop saved. Paste the WebM or the canvas embed on Neocities.";refreshSlots();},ms);
+};
+
+refreshModels();refreshSlots();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
