@@ -13,8 +13,11 @@
   @media (prefers-color-scheme: dark) { body { background: #222; color: #eee; } }
   h1 { font-size: 20px; margin: 0 0 4px; }
   .sub { font-size: 12px; opacity: .75; margin-bottom: 12px; }
-  .wrap { display: flex; gap: 16px; flex-wrap: wrap; }
+  .wrap { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
   .panel { background: #efefef; border: 2px outset #fff; padding: 12px; width: 340px; }
+  .panel.left { width: 330px; }
+  .panel.right { width: 400px; }
+  .stage { flex: 1 1 320px; min-width: 280px; position: sticky; top: 16px; }
   @media (prefers-color-scheme: dark) { .panel { background: #333; border-color: #555; } }
   .panel h2 { font-size: 13px; margin: 14px 0 6px; border-bottom: 1px solid #999; padding-bottom: 2px; }
   .panel h2:first-child { margin-top: 0; }
@@ -40,17 +43,25 @@
 <h1>◈ retro-qd3d studio</h1>
 <div class="sub">A modern remake of Apple's <b>3D Movie Maker v1.0 (1998)</b> —
 pick a low-poly model → slap your own photos on it → pick a spin → export a looping
-embed for Neocities. Everything stays in your browser. Drag on the preview to rotate.</div>
+embed for Neocities. Everything stays in your browser. Drag on the preview to rotate.
+Full instructions: <a href="docs/GUIDE.md">user guide</a>.</div>
 
 <div class="wrap">
-  <div class="panel">
+  <div class="panel left">
     <h2>1 · Model Select <span class="hint">(orig: click a model / drop a .3df — here: click / drop .obj)</span></h2>
     <div class="models" id="modelBtns"></div>
     <div class="row"><input type="file" id="objFile" accept=".obj,.txt"></div>
 
     <h2>2 · Textures <span class="hint">(orig: drop PICT on a part — here: pick a slot, upload a photo; auto 16-bit + power-of-2)</span></h2>
     <div id="slots"></div>
+  </div>
 
+  <div class="stage">
+    <canvas id="view" width="320" height="240"></canvas>
+    <p class="hint" id="stat"></p>
+  </div>
+
+  <div class="panel right">
     <h2>3 · Animation <span class="hint">(orig: 4 choices — same 4 here)</span></h2>
     <div class="row" id="anims">
       <label><input type="radio" name="anim" value="y" checked> Spin Y</label>
@@ -92,6 +103,35 @@ embed for Neocities. Everything stays in your browser. Drag on the preview to ro
     <div class="row"><label>Height <input type="range" id="scY" min="10" max="200" value="100"> <span id="scYV">100%</span></label></div>
     <div class="row"><label>Thickness <input type="range" id="scZ" min="5" max="200" value="100"> <span id="scZV">100%</span></label></div>
     <div class="row"><button id="bShapeReset">Reset shape</button></div>
+
+    <h2>6 · Model <span class="hint">(Swivel room — homage to Swivel 3D 1988: draw a contour, extrude or lathe it)</span></h2>
+    <div class="row" id="swTools">
+      <label><input type="radio" name="sw" value="rect" checked> Rectangle</label>
+      <label><input type="radio" name="sw" value="ngon"> N-gon</label>
+      <label><input type="radio" name="sw" value="free"> Free poly</label>
+      <label><input type="radio" name="sw" value="arrow"> Arrow</label>
+    </div>
+    <canvas id="swed" width="320" height="240" tabindex="0"
+      style="width:100%;border:2px inset #fff;background:#fff;cursor:crosshair;display:block"></canvas>
+    <div class="row">
+      <label>N-gon sides <input type="range" id="swSides" min="6" max="48" value="12"> <span id="swSidesV">12</span></label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="swSym"> Symmetric edit (Double Arrow)</label>
+      <label><input type="checkbox" id="swSnap" checked> Snap</label>
+    </div>
+    <div class="row">
+      <label>Build <select id="swMode"><option value="extrude">Extrude</option><option value="lathe">Lathe ⤾</option></select></label>
+      <label>Depth <input type="range" id="swDepth" min="10" max="200" value="60"> <span id="swDepthV">0.6</span></label>
+      <label>Lathe segs <input type="range" id="swSeg" min="6" max="24" value="12"> <span id="swSegV">12</span></label>
+    </div>
+    <div class="row">
+      <button class="act" id="bSwBuild">⧉ Build &amp; use model</button>
+      <button id="bSwObj">Download OBJ</button>
+      <button id="bSwClear">Clear</button>
+    </div>
+    <p class="hint">Free poly: click points, double-click or Enter to close. Arrow: drag points
+    (symmetric mirrors ±x). Like the original, you start from a default cube outline.</p>
     <textarea id="embed" placeholder="Your self-contained &lt;canvas&gt; embed code appears here — paste it into your Neocities page."></textarea>
     <div class="row"><button id="bCopy">Copy embed</button><button id="bDl">Download embed .html</button></div>
     <p class="hint">IRL workflow: photograph something you own (book, CD, box, framed print) in flat
@@ -101,10 +141,6 @@ embed for Neocities. Everything stays in your browser. Drag on the preview to ro
     use “Copy &lt;video&gt; tag” to get it right.</p>
   </div>
 
-  <div class="stage">
-    <canvas id="view" width="320" height="240"></canvas>
-    <p class="hint" id="stat"></p>
-  </div>
 </div>
 
 <script>
@@ -440,6 +476,243 @@ function frame(now){
   vctx.drawImage(low,0,0,W,H);
   requestAnimationFrame(frame);
 }
+
+// ---- Swivel room: contour editor + extrude/lathe builder ----
+var swPts=[[-0.6,-0.5],[0.6,-0.5],[0.6,0.5],[-0.6,0.5]]; // default outline, like Swivel's cube
+var swDragPt=-1, swDragStart=null, swTemp=null, swBuilt=null;
+var swed=document.getElementById("swed"), swx=swed.getContext("2d");
+var SW_S=100; // px per world unit
+function swTool(){var r=document.querySelector('input[name=sw]:checked');return r?r.value:"rect";}
+function swToPx(p){return [160+p[0]*SW_S,120-p[1]*SW_S];}
+function swToWorld(ev){
+  var r=swed.getBoundingClientRect();
+  var mx=(ev.clientX-r.left)*swed.width/r.width, my=(ev.clientY-r.top)*swed.height/r.height;
+  var p=[(mx-160)/SW_S,(120-my)/SW_S];
+  if(document.getElementById("swSnap").checked){p[0]=Math.round(p[0]*10)/10;p[1]=Math.round(p[1]*10)/10;}
+  return p;
+}
+function swDraw(){
+  var i,p;
+  swx.fillStyle="#fff";swx.fillRect(0,0,320,240);
+  swx.strokeStyle="#ddd";swx.lineWidth=1;swx.beginPath();
+  for(i=0;i<=320;i+=20){swx.moveTo(i,0);swx.lineTo(i,240);}
+  for(i=0;i<=240;i+=20){swx.moveTo(0,i);swx.lineTo(320,i);}
+  swx.stroke();
+  swx.strokeStyle="#999";swx.beginPath();swx.moveTo(160,0);swx.lineTo(160,240);swx.moveTo(0,120);swx.lineTo(320,120);swx.stroke();
+  function path(pts,close){
+    swx.beginPath();
+    pts.forEach(function(q,j){var s=swToPx(q);if(j===0)swx.moveTo(s[0],s[1]);else swx.lineTo(s[0],s[1]);});
+    if(close)swx.closePath();
+  }
+  if(swPts.length>1){path(swPts,true);swx.fillStyle="rgba(0,0,200,0.08)";swx.fill();
+    swx.strokeStyle="#0000cc";swx.lineWidth=2;swx.stroke();}
+  if(swTemp){path(swTemp,false);swx.strokeStyle="#cc0000";swx.lineWidth=1;swx.setLineDash([4,3]);swx.stroke();swx.setLineDash([]);}
+  swx.fillStyle="#0000cc";
+  swPts.forEach(function(q){var s=swToPx(q);swx.fillRect(s[0]-3,s[1]-3,6,6);});
+}
+function swNearest(p, tol){
+  var best=-1,bd=tol||1e9,i,dx,dy;
+  swPts.forEach(function(q,j){dx=q[0]-p[0];dy=q[1]-p[1];var d=dx*dx+dy*dy;if(d<bd){bd=d;best=j;}});
+  return best;
+}
+swed.addEventListener("pointerdown",function(e){
+  swed.focus();swed.setPointerCapture(e.pointerId);
+  var p=swToWorld(e),tool=swTool();
+  if(tool==="arrow"){
+    var j=swNearest(p,0.09); // ~9px tolerance in world units (0.09²)
+    if(j>=0){swDragPt=j;swDragStart=[p[0],p[1]];}
+  } else if(tool==="free"){
+    if(swTemp){swTemp.push(p);}
+    else {swTemp=[p];}
+    swDraw();
+  } else {
+    swDragStart=p;swTemp=[p,p];swDraw();
+  }
+});
+swed.addEventListener("pointermove",function(e){
+  var p=swToWorld(e),tool=swTool(),i;
+  if(tool==="arrow"&&swDragPt>=0){
+    swPts[swDragPt]=p;
+    if(document.getElementById("swSym").checked){ // Double Arrow: mirror ±x
+      for(i=0;i<swPts.length;i++){
+        if(i!==swDragPt&&Math.abs(swPts[i][0]+swPts[swDragPt][0])<0.11&&Math.abs(swPts[i][1]-swPts[swDragPt][1])<0.11){
+          swPts[i]=[-swPts[swDragPt][0],swPts[swDragPt][1]];break;
+        }
+      }
+    }
+    swDraw();
+  } else if(swDragStart&&(tool==="rect"||tool==="ngon")){
+    swTemp=swPreview(tool,swDragStart,p);swDraw();
+  } else if(swTemp&&tool==="free"){
+    var ghost=swTemp.concat([p]);swDrawGhost(ghost);
+  }
+});
+function swDrawGhost(ghost){
+  swx.strokeStyle="#cc0000";swx.lineWidth=1;swx.setLineDash([4,3]);swx.beginPath();
+  ghost.forEach(function(q,j){var s=swToPx(q);if(j===0)swx.moveTo(s[0],s[1]);else swx.lineTo(s[0],s[1]);});
+  swx.stroke();swx.setLineDash([]);
+}
+function swPreview(tool,a,b){
+  if(tool==="rect")return [[a[0],a[1]],[b[0],a[1]],[b[0],b[1]],[a[0],b[1]]];
+  var n=+document.getElementById("swSides").value||12;
+  var r=Math.max(0.05,Math.hypot(b[0]-a[0],b[1]-a[1])),o=[],k;
+  for(k=0;k<n;k++){var t=k/n*2*Math.PI;o.push([a[0]+r*Math.cos(t),a[1]+r*Math.sin(t)]);}
+  return o;
+}
+swed.addEventListener("pointerup",function(e){
+  var tool=swTool();
+  if(tool==="arrow"){swDragPt=-1;return;}
+  if(tool==="free")return; // closed via double-click / Enter
+  var p=swToWorld(e);
+  var pts=swPreview(tool,swDragStart,p);
+  pts=swClean(pts);
+  if(pts.length>=3){swPts=pts;}
+  swDragStart=null;swTemp=null;swDraw();
+});
+swed.addEventListener("dblclick",function(){swCloseFree();});
+document.addEventListener("keydown",function(e){
+  if(document.activeElement===swed&&swTool()==="free"&&swTemp){
+    if(e.key==="Enter")swCloseFree();
+    if(e.key==="Backspace"||e.key==="Delete"){swTemp.pop();if(!swTemp.length)swTemp=null;swDraw();e.preventDefault();}
+    if(e.key==="Escape"){swTemp=null;swDraw();}
+  }
+});
+function swClean(pts){
+  var o=[];
+  pts.forEach(function(p){
+    var l=o[o.length-1];
+    if(!l||Math.abs(l[0]-p[0])>1e-9||Math.abs(l[1]-p[1])>1e-9)o.push(p);
+  });
+  if(o.length>1){var f=o[0],l2=o[o.length-1];
+    if(Math.abs(f[0]-l2[0])<1e-9&&Math.abs(f[1]-l2[1])<1e-9)o.pop();}
+  return o;
+}
+function swCloseFree(){
+  if(swTemp&&swTemp.length>=3){var c=swClean(swTemp);if(c.length>=3)swPts=c;}
+  swTemp=null;swDraw();
+}
+document.getElementById("bSwClear").onclick=function(){swPts=[];swTemp=null;swDraw();};
+[["swSides","swSidesV",null],["swDepth","swDepthV",function(v){return (v/100).toFixed(1);}],["swSeg","swSegV",null]].forEach(function(p){
+  document.getElementById(p[0]).oninput=function(e){
+    document.getElementById(p[1]).textContent=p[2]?p[2](+e.target.value):e.target.value;
+  };
+});
+document.querySelectorAll('input[name=sw]').forEach(function(r){r.onchange=function(){swTemp=null;swDraw();};});
+
+// -- geometry: ear-clip caps (concave-safe) + auto-oriented faces --
+function swArea(pts){var a=0,i,j;for(i=0;i<pts.length;i++){j=(i+1)%pts.length;a+=pts[i][0]*pts[j][1]-pts[j][0]*pts[i][1];}return a/2;}
+function swTriangulate(pts){
+  var n=pts.length,idx=[],i;for(i=0;i<n;i++)idx.push(i);
+  var tris=[],guard=0;
+  function cr(o,a,b){return (a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);}
+  function inTri(p,a,b,c){
+    var s1=cr(p,a,b),s2=cr(p,b,c),s3=cr(p,c,a);
+    return (s1>1e-9&&s2>1e-9&&s3>1e-9)||(s1<-1e-9&&s2<-1e-9&&s3<-1e-9);
+  }
+  while(idx.length>3&&guard++<500){
+    var found=false;
+    for(i=0;i<idx.length;i++){
+      var i0=idx[(i+idx.length-1)%idx.length],i1=idx[i],i2=idx[(i+1)%idx.length];
+      var A=pts[i0],B=pts[i1],C=pts[i2];
+      if(cr(A,B,C)<=1e-9)continue;
+      var ok=true,j;
+      for(j=0;j<idx.length;j++){var k=idx[j];
+        if(k===i0||k===i1||k===i2)continue;
+        if(inTri(pts[k],A,B,C)){ok=false;break;}}
+      if(ok){tris.push([i0,i1,i2]);idx.splice(i,1);found=true;break;}
+    }
+    if(!found){
+      // Fallback: fan the remainder (covers collinear leftovers; swPush orients).
+      for(var f=1;f<idx.length-1;f++)tris.push([idx[0],idx[f],idx[f+1]]);
+      idx.length=0;break;
+    }
+  }
+  if(idx.length===3)tris.push([idx[0],idx[1],idx[2]]);
+  return tris;
+}
+// push one face, auto-flipping its winding so the normal follows ref()
+function swPush(M,vi,ref){
+  var P=vi.map(function(i){return M.verts[i];});
+  var A=P[0],B=P[1],C=P[2];
+  var e1=[B[0]-A[0],B[1]-A[1],B[2]-A[2]],e2=[C[0]-A[0],C[1]-A[1],C[2]-A[2]];
+  var n=[e1[1]*e2[2]-e1[2]*e2[1],e1[2]*e2[0]-e1[0]*e2[2],e1[0]*e2[1]-e1[1]*e2[0]];
+  var r=ref(A,B,C);
+  var v=vi.slice();
+  if(n[0]*r[0]+n[1]*r[1]+n[2]*r[2]<0)v.reverse();
+  M.faces.push({v:v,slot:"custom",c:[170,170,190]});
+}
+function swBuildExtrude(pts,depth){
+  var P=pts.map(function(p){return [p[0],p[1]];});
+  if(swArea(P)<0)P.reverse();
+  var tris=swTriangulate(P);
+  if(!tris.length)return null;
+  var M={label:"Swivel: extruded "+P.length+"-gon",verts:[],faces:[]};
+  var cx=0,cy=0,i;for(i=0;i<P.length;i++){cx+=P[i][0];cy+=P[i][1];}cx/=P.length;cy/=P.length;
+  var back=[],front=[];
+  for(i=0;i<P.length;i++){M.verts.push([P[i][0],P[i][1],0]);back.push(M.verts.length-1);}
+  for(i=0;i<P.length;i++){M.verts.push([P[i][0],P[i][1],depth]);front.push(M.verts.length-1);}
+  var cb=M.verts.length;M.verts.push([cx,cy,0]);
+  var cf=M.verts.length;M.verts.push([cx,cy,depth]);
+  var n=P.length,k;
+  for(k=0;k<n;k++){var k2=(k+1)%n;
+    swPush(M,[back[k],back[k2],front[k2],front[k]],function(){
+      var mx=(P[k][0]+P[k2][0])/2-cx,my=(P[k][1]+P[k2][1])/2-cy;return [mx,my,0];});}
+  tris.forEach(function(t){
+    swPush(M,[cf,front[t[0]],front[t[1]],front[t[2]]],function(){return [0,0,1];});
+    swPush(M,[cb,back[t[0]],back[t[1]],back[t[2]]],function(){return [0,0,-1];});});
+  return M;
+}
+function swBuildLathe(pts,seg){
+  var P=pts.map(function(p){return [p[0],p[1]];});
+  if(P.length<2)return null;
+  var M={label:"Swivel: lathe "+P.length+"pt x"+seg,verts:[],faces:[]};
+  var s,i,rings=[];
+  for(s=0;s<seg;s++){var a=s/seg*2*Math.PI,ring=[];
+    for(i=0;i<P.length;i++){M.verts.push([P[i][0]*Math.cos(a),P[i][1],P[i][0]*Math.sin(a)]);ring.push(M.verts.length-1);}
+    rings.push(ring);}
+  var n=P.length;
+  for(s=0;s<seg;s++){var s2=(s+1)%seg;
+    for(i=0;i<n-1;i++){
+      swPush(M,[rings[s][i],rings[s2][i],rings[s2][i+1],rings[s][i+1]],function(A){
+        return [A[0],0,A[2]];});}}
+  var ys=P.map(function(p){return p[1];});
+  var top=M.verts.length;M.verts.push([0,Math.max.apply(null,ys),0]);
+  var bot=M.verts.length;M.verts.push([0,Math.min.apply(null,ys),0]);
+  for(s=0;s<seg;s++){var q=(s+1)%seg;
+    swPush(M,[top,rings[s][n-1],rings[q][n-1]],function(){return [0,1,0];});
+    swPush(M,[bot,rings[q][0],rings[s][0]],function(){return [0,-1,0];});}
+  return M;
+}
+function swBuildModel(){
+  if(swPts.length<3){stat.textContent="Draw a contour first (3+ points).";return null;}
+  var mode=document.getElementById("swMode").value;
+  var M=(mode==="lathe")
+    ? swBuildLathe(swPts,+document.getElementById("swSeg").value||12)
+    : swBuildExtrude(swPts,(+document.getElementById("swDepth").value||60)/100);
+  if(!M){stat.textContent="Could not build — degenerate contour?";return null;}
+  return M;
+}
+document.getElementById("bSwBuild").onclick=function(){
+  var M=swBuildModel();if(!M)return;
+  swBuilt=M;MODELS.custom=M;
+  state.model="custom";state.textures={};state.texURL={};resetShape();
+  refreshModels();refreshSlots();
+  stat.textContent=M.label+": "+M.verts.length+" verts — texture, spin and export it like any model.";
+};
+document.getElementById("bSwObj").onclick=function(){
+  var M=swBuilt||swBuildModel();if(!M)return;
+  swBuilt=M;
+  var out="# retro-qd3d swivel-room model ("+M.label+")\n";
+  M.verts.forEach(function(v){out+="v "+v[0].toFixed(4)+" "+v[1].toFixed(4)+" "+v[2].toFixed(4)+"\n";});
+  M.faces.forEach(function(f){
+    var idx=f.v.map(function(i){return i+1;});
+    for(var t=1;t<idx.length-1;t++)out+="f "+idx[0]+" "+idx[t]+" "+idx[t+1]+"\n";
+  });
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([out],{type:"text/plain"}));
+  a.download="swivel-model.obj";a.click();
+};
+swDraw();
 
 // ---- exporters ----
 function texImgsForEmbed(){

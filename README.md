@@ -66,9 +66,18 @@ Mirrors the 3 screens, keeps the retro constraints on purpose:
 - `studio.html` — the whole app + exporter. Open in any browser, or host it.
   It is one file with zero dependencies: click **Save offline studio .html** inside
   the app (or copy the file) and it runs from `file://` with no internet.
+  Layout is 3-column on wide screens (model+textures | sticky preview |
+  animation→export→shape→swivel) and stacks on narrow ones.
+- `docs/GUIDE.md` — user guide: quickstart, every section, Neocities
+  publishing, IRL workflow, troubleshooting.
 - `models/` — hand-rebuilt `.obj` equivalents of the 4 built-ins + texture-slot notes.
 - Section 5 (Shape) adds Width/Height/Thickness sliders the original never had —
   the CD is modeled almost flat (rim ±0.02) like a real disc; flatten/thicken at will.
+- Section 6 (Swivel room, homage to Swivel 3D 1988 — see `notes/SWIVEL_NOTES.md`):
+  draw a contour (Rectangle / N-gon 6–48 / Free-poly / Arrow point-drag with
+  Double-Arrow symmetric edit + snap grid), then Extrude (concave-safe caps)
+  or Lathe it into a low-poly model that feeds the whole pipeline
+  (texture → spin → loop → embed/WebM/OBJ).
 - `notes/` — byte-level reverse notes (PEF header, strings hits, 3DMF walk).
 
 ## Use
