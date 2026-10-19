@@ -51,6 +51,10 @@
   .edSide { flex: 1 1 200px; min-width: 180px; max-width: 260px; }
   #edPrev { display: block; width: 100%; border: 2px inset #fff; background: #006060; }
   .edBtns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+  /* scene thumbnails */
+  .sceneItem { display:flex; align-items:center; gap:6px; padding:4px 2px; border-bottom:1px dashed #aaa; font-size:12px; }
+  .sceneItem img { width:28px;height:28px;object-fit:cover;border:1px solid #666; image-rendering:pixelated; }
+  @media (prefers-color-scheme: dark) { .sceneItem { border-color:#444; } }
 </style>
 </head>
 <body>
@@ -112,6 +116,22 @@ Full instructions: <a href="docs/GUIDE.md">user guide</a>.</div>
       <button id="bVTag">⧉ Copy &lt;video&gt; tag for Neocities</button>
       <button id="bSelf" title="Save this exact studio as one file that works with no internet">⧉ Save offline studio .html</button>
     </div>
+
+    <h2>7 · Tabletop / Scene <span class="hint">(place several models on a grid like a table layout)</span></h2>
+    <div class="row">
+      <label>Grid <input type="number" id="gridW" min="1" max="10" value="5" style="width:50px"> ×<input type="number" id="gridH" min="1" max="10" value="3" style="width:50px"></label>
+      <label>Spacing <input type="range" id="gridSp" min="10" max="300" value="80"> <span id="gridSpV">80</span></label>
+      <button id="bGridApply">Apply layout</button>
+    </div>
+    <div class="row">
+      <button class="act" id="bSceneAdd">➕ Add current model to scene</button>
+      <button id="bSceneClear">🗑 Clear scene</button>
+      <button id="bObjScene">💾 Export scene OBJ (+textures)</button>
+    </div>
+    <div class="row">
+      <span class="hint" id="sceneHint">Scene is empty: build or pick a model, set textures/scale, then “Add current model to scene”.</span>
+    </div>
+    <div id="sceneList" style="max-height:160px;overflow:auto;font-size:12px"></div>
 
     <h2>5 · Shape <span class="hint">(resize the model — width / height / thickness)</span></h2>
     <div class="row"><label>Width <input type="range" id="scX" min="10" max="200" value="100"> <span id="scXV">100%</span></label></div>
@@ -605,7 +625,79 @@ document.addEventListener("keydown",function(e){
   if(e.key==="Escape"&&edBox.style.display!=="none") edClose();
 });
 
-// ---- UI ----
+// ---- scene / tabletop ----
+var scene=[]; // {label, verts, faces, scale:[x,y,z], pos:[x,y], rot:deg, textures:{slot:url}}
+
+function refreshScene(){
+  var d=document.getElementById("sceneList");
+  if(!scene.length){d.innerHTML="";document.getElementById("sceneHint").textContent="Scene is empty: build or pick a model, set textures/scale, then “Add current model to scene.”";return;}
+  d.innerHTML="";
+  scene.forEach(function(it,i){
+    var row=document.createElement("div");row.className="sceneItem";
+    var img=document.createElement("img");
+    // build thumb async
+    var c=sceneThumbSnap(it);img.src=c.toDataURL("image/png");img.alt=it.label;
+    var lbl=document.createElement("span");lbl.textContent=it.label||it.model;
+    lbl.style.flex="1";
+    var rm=document.createElement("button");rm.textContent="✕";rm.title="remove from scene";
+    rm.onclick=function(){scene.splice(i,1);refreshScene();};
+    row.appendChild(img);row.appendChild(lbl);row.appendChild(rm);
+    d.appendChild(row);
+  });
+  document.getElementById("sceneHint").textContent=scene.length+" object(s) on the table. Use Export OBJ to download the table layout.";
+}
+// thumbnail: small software-rendered preview using drawScene (textured)
+function sceneThumbSnap(obj){
+  var s=48;
+  var c=document.createElement("canvas"); c.width=s; c.height=s;
+  var ctx=c.getContext("2d");
+  // load textures, then draw
+  var imgs={}, keys=Object.keys(obj.textures||{}), n=0;
+  function go(){ drawScene(ctx,obj,imgs,0,0,0,"none",s,s,document.getElementById("bg").value,1,obj.scale||[1,1,1]); }
+  if(!keys.length){go();return c;}
+  keys.forEach(function(k){
+    var im=new Image();
+    im.onload=function(){n++;imgs[k]=im; if(n===keys.length)go();};
+    im.src=obj.textures[k];
+  });
+  return c;
+}
+document.getElementById("bSceneAdd").onclick=function(){
+  var m=MODELS[state.model];
+  if(!m||!m.verts.length){alert("No model to add.");return;}
+  // bake scale into a snapshot
+  var sc=state.scale;
+  var v2=m.verts.map(function(p){return [p[0]*sc.x,p[1]*sc.y,p[2]*sc.z];});
+  scene.push({label:m.label,model:state.model,verts:v2,faces:m.faces,
+              pos:[0,0],rot:0,scale:[sc.x,sc.y,sc.z],textures:Object.assign({},state.texURL)});
+  refreshScene();
+};
+document.getElementById("bSceneClear").onclick=function(){
+  if(confirm("Clear the whole table?"))scene=[];refreshScene();
+};
+document.getElementById("bGridApply").onclick=function(){
+  if(!scene.length)return;
+  var gw=+document.getElementById("gridW").value||5;
+  var gh=+document.getElementById("gridH").value||3;
+  var sp=+document.getElementById("gridSp").value||80;
+  var n=0;
+  scene.forEach(function(it){
+    var col=n%gw,row=Math.floor(n/gw);
+    if(col<gw){
+      it.pos=[col*sp-gw*sp/2+sp/2,row*sp-gh*sp/2+sp/2];
+      it.rot=(n%4)*90;
+      it._offscreen=false; n++;
+    } else { it._offscreen=true; }
+  });
+  refreshScene();
+  document.getElementById("gridSpV").textContent=sp;
+  stat.textContent="Laid out "+Math.min(n,scene.length)+" object(s) on a "+gw+"×"+gh+" grid, "+sp+" units apart.";
+};
+document.getElementById("gridSp").oninput=function(e){
+  document.getElementById("gridSpV").textContent=e.target.value;
+};
+
+// ---- exporters ----
 var view=document.getElementById("view"),vctx=view.getContext("2d");
 var low=document.createElement("canvas"),lowCtx=low.getContext("2d");
 var modelBtns=document.getElementById("modelBtns"),slotsDiv=document.getElementById("slots");
@@ -951,18 +1043,90 @@ document.getElementById("bSwBuild").onclick=function(){
   refreshModels();refreshSlots();
   stat.textContent=M.label+": "+M.verts.length+" verts — texture, spin and export it like any model.";
 };
+// ---- helpers ----
+function dl(name, blob){
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);},20000);
+}
+// ---- OBJ export: writes a mesh with planar XY UVs; returns text, updates offsets ----
+function objFromMesh(obj, vOff){
+  var v="",vt="",f="";
+  obj.verts.forEach(function(p){v+="v "+p[0].toFixed(4)+" "+p[1].toFixed(4)+" "+p[2].toFixed(4)+"\n";});
+  var faceGroups={};
+  obj.faces.forEach(function(fc){
+    var p=obj.verts,pts=fc.v.map(function(i){return p[i];});
+    var minx=Math.min.apply(null,pts.map(function(pn){return pn[0];})),
+        maxx=Math.max.apply(null,pts.map(function(pn){return pn[0];})),
+        miny=Math.min.apply(null,pts.map(function(pn){return pn[1];})),
+        maxy=Math.max.apply(null,pts.map(function(pn){return pn[1];})),
+        w=maxx-minx||1,h=maxy-miny||1;
+    var vts=fc.v.map(function(pi){return [(pi[0]-minx)/w,(pi[1]-miny)/h];});
+    var start=vOff.vt+1;
+    for(var i=0;i<vts.length;i++){vt+="vt "+vts[i][0].toFixed(5)+" "+vts[i][1].toFixed(5)+"\n";vOff.vt++;}
+    var idx=fc.v.map(function(i){return i+vOff.v+1;});
+    var fp=[];
+    for(var k=0;k<idx.length;k++)fp.push(idx[k]+"/"+(start+k));
+    (faceGroups[fc.slot]=faceGroups[fc.slot]||[]).push("f "+fp.join(" "));
+  });
+  Object.keys(faceGroups).forEach(function(slot){
+    f+="o face_"+slot+"\nusemtl "+slot+"\n";
+    faceGroups[slot].forEach(function(l){f+=l+"\n";});
+  });
+  vOff.v+=obj.verts.length;
+  return v+vt+f;
+}
+function downloadObjMtl(sceneObjs, baseName){
+  var vOff={v:0,vt:1};
+  var obj="mtllib "+baseName+".mtl\n# retro-qd3d scene export\n";
+  var texFiles=[],usedSlots={};
+  sceneObjs.forEach(function(it){
+    var r=(it.rot||0)*Math.PI/180,cr=Math.cos(r),sr=Math.sin(r);
+    var vx=it.scale[0]||1,vy=it.scale[1]||1,vz=it.scale[2]||1;
+    var PX=it.pos[0]||0,PZ=it.pos[1]||0;
+    var baked={label:it.label,verts:it.verts.map(function(p){
+      var x=p[0]*vx,y=p[1]*vy,z=p[2]*vz;
+      var rx=x*cr-z*sr,rz=x*sr+z*cr; // rotate around Y (tabletop)
+      return [rx+PX,y,rz+PZ];
+    }),faces:it.faces};
+    obj+="# "+it.label+"\n";
+    obj+=objFromMesh(baked,vOff);
+    Object.keys(it.textures||{}).forEach(function(s){
+      if(it.textures[s]&&!texFiles.some(function(t){return t.slot===s;}))
+        texFiles.push({slot:s,url:it.textures[s]});
+    });
+  });
+  // MTL: one material per slot; textured slots reference a PNG, else flat Kd color
+  var mtl="# retro-qd3d material library\n";
+  sceneObjs.forEach(function(it){it.faces.forEach(function(fc){usedSlots[fc.slot]=true;});});
+  Object.keys(usedSlots).forEach(function(s){
+    mtl+="newmtl "+s+"\n";
+    if(texFiles.some(function(t){return t.slot===s;})){
+      mtl+="map_Kd tex-"+s+".png\n";
+    } else {
+      var col=SLOT_COLORS[s]||[170,170,190];
+      mtl+="Kd "+(col[0]/255).toFixed(3)+" "+(col[1]/255).toFixed(3)+" "+(col[2]/255).toFixed(3)+"\n";
+    }
+  });
+  dl(baseName+".obj",new Blob([obj],{type:"text/plain"}));
+  dl(baseName+".mtl",new Blob([mtl],{type:"text/plain"}));
+  texFiles.forEach(function(t){
+    var parts=t.url.split(",");
+    var bin=atob(parts[1]),arr=new Uint8Array(bin.length);
+    for(var j=0;j<bin.length;j++)arr[j]=bin.charCodeAt(j);
+    dl("tex-"+t.slot+".png",new Blob([arr],{type:"image/png"}));
+  });
+  stat.textContent="Downloaded "+baseName+".obj + .mtl + "+texFiles.length+" texture PNG(s). Open the .obj in Blender/Meshlab/etc.";
+}
+
 document.getElementById("bSwObj").onclick=function(){
   var M=swBuilt||swBuildModel();if(!M)return;
   swBuilt=M;
-  var out="# retro-qd3d swivel-room model ("+M.label+")\n";
-  M.verts.forEach(function(v){out+="v "+v[0].toFixed(4)+" "+v[1].toFixed(4)+" "+v[2].toFixed(4)+"\n";});
-  M.faces.forEach(function(f){
-    var idx=f.v.map(function(i){return i+1;});
-    for(var t=1;t<idx.length-1;t++)out+="f "+idx[0]+" "+idx[t]+" "+idx[t+1]+"\n";
-  });
-  var a=document.createElement("a");
-  a.href=URL.createObjectURL(new Blob([out],{type:"text/plain"}));
-  a.download="swivel-model.obj";a.click();
+  downloadObjMtl([{label:M.label,verts:M.verts,faces:M.faces,scale:[1,1,1],pos:[0,0],rot:0,textures:(state.texURL||{})}], "swivel-model");
+};
+document.getElementById("bObjScene").onclick=function(){
+  if(!scene.length){alert("Scene is empty.");return;}
+  downloadObjMtl(scene,"retro-qd3d-scene");
 };
 swDraw();
 
