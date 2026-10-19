@@ -36,6 +36,21 @@
   button.act { padding: 8px 10px; cursor: pointer; font-weight: bold; }
   .hint { font-size: 11px; opacity: .8; }
   input[type=file] { font-size: 11px; max-width: 200px; }
+
+  /* ---- texture editor modal (trim / zoom / perspective) ---- */
+  .imedit { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 40;
+            display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .imeditBox { background: #efefef; border: 2px outset #fff; padding: 12px;
+               width: 100%; max-width: 880px; max-height: 96vh; overflow: auto; }
+  @media (prefers-color-scheme: dark) { .imeditBox { background: #333; border-color: #555; } }
+  .imeditBox h3 { margin: 0 0 8px; font-size: 14px; }
+  .edRow { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .edMain { flex: 1 1 320px; min-width: 260px; }
+  #edCanvas { display: block; width: 100%; max-width: 560px; border: 2px inset #fff;
+              background: #006060; cursor: crosshair; touch-action: none; }
+  .edSide { flex: 1 1 200px; min-width: 180px; max-width: 260px; }
+  #edPrev { display: block; width: 100%; border: 2px inset #fff; background: #006060; }
+  .edBtns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
 </style>
 </head>
 <body>
@@ -141,6 +156,33 @@ Full instructions: <a href="docs/GUIDE.md">user guide</a>.</div>
     use “Copy &lt;video&gt; tag” to get it right.</p>
   </div>
 
+</div>
+
+<div class="imedit" id="imedit" style="display:none">
+  <div class="imeditBox">
+    <h3>◻ Texture editor — <span id="edSlot">photo</span></h3>
+    <div class="edRow">
+      <div class="edMain"><canvas id="edCanvas" width="560" height="360"></canvas></div>
+      <div class="edSide">
+        <div class="hint" style="margin-bottom:4px">Result (live):</div>
+        <canvas id="edPrev" width="240" height="160"></canvas>
+        <div class="row" style="margin-top:8px">
+          <label>Enlarge / shrink
+            <input type="range" id="edZoom" min="25" max="400" value="100" style="width:110px"> <span id="edZoomV">100%</span>
+          </label>
+        </div>
+        <div class="row"><button id="edReset">Reset corners</button></div>
+        <div class="hint">Drag the 4 blue handles: move them inward to <b>trim</b>, slant them to
+        <b>correct perspective</b> (mark the real edges of the object and it gets flattened).
+        The slider <b>enlarges / shrinks</b> what is applied. The small preview shows the result.</div>
+      </div>
+    </div>
+    <div class="edBtns">
+      <button class="act" id="edApply">✓ Apply to texture</button>
+      <button id="edCancel">Cancel</button>
+      <span class="hint">Everything stays in the browser.</span>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -349,9 +391,219 @@ function fileToImage(file, cb, errb){
 }
 function handleSlotFile(file, slot){
   fileToImage(file,function(im){
-    quantizeImage(im,function(q,url){state.textures[slot]=q;state.texURL[slot]=url;refreshSlots();});
+    edOpen(im,slot); // adjust trim / zoom / perspective first, then Apply
   },function(msg){stat.textContent=msg;});
 }
+
+// ============================================================
+// Texture editor — trim, enlarge/shrink and perspective.
+// The 4 corner handles mark the part of the photo you want:
+// moving a corner trims; slanting the quad rectifies perspective.
+// Apply warps that quad into a flat rectangle (homography, drawn
+// as a grid of affine triangles) and sends it to the old 16-bit
+// quantizer, so everything downstream is unchanged.
+// ============================================================
+var edBox=document.getElementById("imedit"),
+    edC=document.getElementById("edCanvas"), edx=edC.getContext("2d"),
+    edP=document.getElementById("edPrev"), edpx=edP.getContext("2d");
+var EDW=edC.width, EDH=edC.height, RPW=edP.width, RPH=edP.height;
+var edImg=null, edSlot=null, edQuad=null, edZoom=100, edDrag=-1;
+var edFitS=1, edFitX=0, edFitY=0;
+
+function edOpen(img, slot){
+  edImg=img; edSlot=slot; edZoom=100; edDrag=-1;
+  edQuad=[[0,0],[img.width,0],[img.width,img.height],[0,img.height]];
+  var z=document.getElementById("edZoom"); z.value=100;
+  document.getElementById("edZoomV").textContent="100%";
+  document.getElementById("edSlot").textContent=SLOT_NAMES[slot]||slot;
+  edFitS=Math.min((EDW-24)/img.width,(EDH-24)/img.height);
+  edFitX=(EDW-img.width*edFitS)/2;
+  edFitY=(EDH-img.height*edFitS)/2;
+  edBox.style.display="flex";
+  edDraw();
+}
+function edClose(){ edBox.style.display="none"; edImg=null; edDrag=-1; }
+
+/* homography: unit square (0,0)-(1,1) -> arbitrary quad p0 TL, p1 TR, p2 BR, p3 BL */
+function edSq2Quad(p){
+  var p0=p[0],p1=p[1],p2=p[2],p3=p[3];
+  var dx1=p1[0]-p2[0], dx2=p3[0]-p2[0], dx3=p0[0]-p1[0]+p2[0]-p3[0];
+  var dy1=p1[1]-p2[1], dy2=p3[1]-p2[1], dy3=p0[1]-p1[1]+p2[1]-p3[1];
+  var g=0,h=0;
+  if(Math.abs(dx3)>1e-7||Math.abs(dy3)>1e-7){
+    var den=dx1*dy2-dy1*dx2;
+    if(Math.abs(den)>1e-9){ g=(dx3*dy2-dy3*dx2)/den; h=(dx1*dy3-dy1*dx3)/den; }
+  }
+  var A=p1[0]-p0[0]+g*p1[0], B=p3[0]-p0[0]+h*p3[0], C=p0[0];
+  var D=p1[1]-p0[1]+g*p1[1], E=p3[1]-p0[1]+h*p3[1], F=p0[1];
+  return function(u,v){
+    var w=g*u+h*v+1; if(Math.abs(w)<1e-9)w=1e-9;
+    return [(A*u+B*v+C)/w,(D*u+E*v+F)/w];
+  };
+}
+/* one textured triangle: source tri -> dest tri, drawn with an affine canvas transform */
+function edTri(ctx,img,s0,s1,s2,d0,d1,d2){
+  var den=s0[0]*(s1[1]-s2[1])+s1[0]*(s2[1]-s0[1])+s2[0]*(s0[1]-s1[1]);
+  if(!isFinite(den)||Math.abs(den)<1e-9) return;
+  var A=(d0[0]*(s1[1]-s2[1])+d1[0]*(s2[1]-s0[1])+d2[0]*(s0[1]-s1[1]))/den;
+  var C=(d0[0]*(s2[0]-s1[0])+d1[0]*(s0[0]-s2[0])+d2[0]*(s1[0]-s0[0]))/den;
+  var E=(d0[0]*(s1[0]*s2[1]-s2[0]*s1[1])+d1[0]*(s2[0]*s0[1]-s0[0]*s2[1])+d2[0]*(s0[0]*s1[1]-s1[0]*s0[1]))/den;
+  var B=(d0[1]*(s1[1]-s2[1])+d1[1]*(s2[1]-s0[1])+d2[1]*(s0[1]-s1[1]))/den;
+  var D=(d0[1]*(s2[0]-s1[0])+d1[1]*(s0[0]-s2[0])+d2[1]*(s1[0]-s0[0]))/den;
+  var F=(d0[1]*(s1[0]*s2[1]-s2[0]*s1[1])+d1[1]*(s2[0]*s0[1]-s0[0]*s2[1])+d2[1]*(s0[0]*s1[1]-s1[0]*s0[1]))/den;
+  if(!isFinite(A)||!isFinite(B)||!isFinite(C)||!isFinite(D)||!isFinite(E)||!isFinite(F)) return;
+  var bx=Math.min(s0[0],s1[0],s2[0]), by=Math.min(s0[1],s1[1],s2[1]);
+  var bw=Math.max(s0[0],s1[0],s2[0])-bx, bh=Math.max(s0[1],s1[1],s2[1])-by;
+  if(bw<1e-4||bh<1e-4) return;
+  // grow the clip triangle by a hair so neighbouring cells leave no seams
+  var cx=(d0[0]+d1[0]+d2[0])/3, cy=(d0[1]+d1[1]+d2[1])/3;
+  var g=[d0,d1,d2].map(function(p){
+    var vx=p[0]-cx,vy=p[1]-cy,l=Math.sqrt(vx*vx+vy*vy)||1;
+    return [p[0]+vx/l*0.7,p[1]+vy/l*0.7];
+  });
+  ctx.save();
+  ctx.beginPath();ctx.moveTo(g[0][0],g[0][1]);ctx.lineTo(g[1][0],g[1][1]);
+  ctx.lineTo(g[2][0],g[2][1]);ctx.closePath();ctx.clip();
+  ctx.setTransform(A,B,C,D,E,F);
+  ctx.drawImage(img,bx,by,bw,bh,bx,by,bw,bh);
+  ctx.restore();
+}
+/* warp source quad (image px) onto dest quad (canvas px) using an NxN grid */
+function edWarp(ctx,img,src,dst,N){
+  N=N||12;
+  var S=edSq2Quad(src), D=edSq2Quad(dst);
+  ctx.imageSmoothingEnabled=true;
+  for(var i=0;i<N;i++){
+    var u0=i/N,u1=(i+1)/N;
+    for(var j=0;j<N;j++){
+      var v0=j/N,v1=(j+1)/N;
+      var sTL=S(u0,v0),sTR=S(u1,v0),sBR=S(u1,v1),sBL=S(u0,v1);
+      var dTL=D(u0,v0),dTR=D(u1,v0),dBR=D(u1,v1),dBL=D(u0,v1);
+      edTri(ctx,img,sTL,sTR,sBR,dTL,dTR,dBR);
+      edTri(ctx,img,sTL,sBR,sBL,dTL,dBR,dBL);
+    }
+  }
+}
+/* natural size of the flattened result (average edge lengths, in image px) */
+function edOutSize(){
+  var q=edQuad;
+  var w=(Math.hypot(q[1][0]-q[0][0],q[1][1]-q[0][1])+Math.hypot(q[2][0]-q[3][0],q[2][1]-q[3][1]))/2;
+  var h=(Math.hypot(q[3][0]-q[0][0],q[3][1]-q[0][1])+Math.hypot(q[2][0]-q[1][0],q[2][1]-q[1][1]))/2;
+  return [Math.max(8,Math.round(w)),Math.max(8,Math.round(h))];
+}
+function edToDisp(p){ return [edFitX+p[0]*edFitS, edFitY+p[1]*edFitS]; }
+function edEvtPos(ev){
+  var r=edC.getBoundingClientRect();
+  return [(ev.clientX-r.left)*EDW/r.width, (ev.clientY-r.top)*EDH/r.height];
+}
+function edDraw(){
+  edx.setTransform(1,0,0,1,0,0);
+  edx.fillStyle="#005959"; edx.fillRect(0,0,EDW,EDH);
+  if(!edImg) return;
+  edx.imageSmoothingEnabled=true;
+  edx.drawImage(edImg,edFitX,edFitY,edImg.width*edFitS,edImg.height*edFitS);
+  var q=edQuad.map(edToDisp);
+  // dim everything outside the selected quad
+  edx.beginPath();
+  edx.rect(0,0,EDW,EDH);
+  edx.moveTo(q[0][0],q[0][1]);edx.lineTo(q[1][0],q[1][1]);
+  edx.lineTo(q[2][0],q[2][1]);edx.lineTo(q[3][0],q[3][1]);edx.closePath();
+  edx.fillStyle="rgba(0,0,0,0.55)"; edx.fill("evenodd");
+  // outline + corner handles
+  edx.beginPath();
+  edx.moveTo(q[0][0],q[0][1]);edx.lineTo(q[1][0],q[1][1]);
+  edx.lineTo(q[2][0],q[2][1]);edx.lineTo(q[3][0],q[3][1]);edx.closePath();
+  edx.lineWidth=3;edx.strokeStyle="rgba(0,0,0,0.6)";edx.stroke();
+  edx.lineWidth=1;edx.strokeStyle="#ffffff";edx.stroke();
+  for(var i=0;i<4;i++){
+    var hx=q[i][0],hy=q[i][1];
+    edx.fillStyle=(i===edDrag)?"#ffd400":"#0000cc";
+    edx.fillRect(hx-7,hy-7,14,14);
+    edx.lineWidth=2;edx.strokeStyle="#ffffff";edx.strokeRect(hx-7,hy-7,14,14);
+  }
+  edDrawPreview();
+}
+function edDrawPreview(){
+  if(!edImg) return;
+  var out=edOutSize();
+  var s=Math.min((RPW-10)/out[0],(RPH-10)/out[1]);
+  var dw=Math.max(2,Math.round(out[0]*s)), dh=Math.max(2,Math.round(out[1]*s));
+  var ox=Math.round((RPW-dw)/2), oy=Math.round((RPH-dh)/2);
+  edpx.setTransform(1,0,0,1,0,0);
+  edpx.fillStyle="#005959"; edpx.fillRect(0,0,RPW,RPH);
+  edpx.fillStyle="#808080"; edpx.fillRect(ox,oy,dw,dh);
+  edWarp(edpx,edImg,edQuad,[[ox,oy],[ox+dw,oy],[ox+dw,oy+dh],[ox,oy+dh]],10);
+}
+function edMoveCorner(x,y){
+  if(edDrag<0||!edImg) return;
+  x=Math.max(0,Math.min(edImg.width,x));
+  y=Math.max(0,Math.min(edImg.height,y));
+  edQuad[edDrag]=[x,y];
+  edDraw();
+}
+edC.addEventListener("pointerdown",function(e){
+  if(!edImg) return;
+  e.preventDefault(); edC.setPointerCapture(e.pointerId);
+  var c=edEvtPos(e), best=-1, bd=1e9;
+  for(var i=0;i<4;i++){
+    var d=edToDisp(edQuad[i]);
+    var dx=d[0]-c[0], dy=d[1]-c[1], dd=dx*dx+dy*dy;
+    if(dd<bd){ bd=dd; best=i; }
+  }
+  if(bd<=24*24) edDrag=best; else edDrag=-1;
+  if(edDrag>=0) edDraw();
+});
+edC.addEventListener("pointermove",function(e){
+  if(edDrag<0) return;
+  var c=edEvtPos(e);
+  edMoveCorner((c[0]-edFitX)/edFitS,(c[1]-edFitY)/edFitS);
+});
+edC.addEventListener("pointerup",function(){ edDrag=-1; if(edImg) edDraw(); });
+edC.addEventListener("pointercancel",function(){ edDrag=-1; if(edImg) edDraw(); });
+
+document.getElementById("edZoom").oninput=function(e){
+  var z=+e.target.value;
+  document.getElementById("edZoomV").textContent=z+"%";
+  if(!edImg||!z||!edZoom) return;
+  var f=z/edZoom; edZoom=z;
+  if(Math.abs(f-1)<1e-6) return;
+  var cx=0,cy=0,i;
+  for(i=0;i<4;i++){cx+=edQuad[i][0];cy+=edQuad[i][1];}
+  cx/=4;cy/=4;
+  for(i=0;i<4;i++){
+    edQuad[i]=[
+      Math.max(0,Math.min(edImg.width,  cx+(edQuad[i][0]-cx)/f)),
+      Math.max(0,Math.min(edImg.height, cy+(edQuad[i][1]-cy)/f))];
+  }
+  edDraw();
+};
+document.getElementById("edReset").onclick=function(){
+  if(!edImg) return;
+  edQuad=[[0,0],[edImg.width,0],[edImg.width,edImg.height],[0,edImg.height]];
+  edZoom=100; edDrag=-1;
+  document.getElementById("edZoom").value=100;
+  document.getElementById("edZoomV").textContent="100%";
+  edDraw();
+};
+document.getElementById("edCancel").onclick=edClose;
+document.getElementById("edApply").onclick=function(){
+  if(!edImg) return;
+  var out=edOutSize(), cap=512, s=Math.min(1,cap/Math.max(out[0],out[1]));
+  var W=Math.max(8,Math.round(out[0]*s)), H=Math.max(8,Math.round(out[1]*s));
+  var c=document.createElement("canvas"); c.width=W; c.height=H;
+  var x=c.getContext("2d");
+  x.fillStyle="#808080"; x.fillRect(0,0,W,H);
+  edWarp(x,edImg,edQuad,[[0,0],[W,0],[W,H],[0,H]],20);
+  var slot=edSlot;
+  edClose();
+  quantizeImage(c,function(q,url){
+    state.textures[slot]=q; state.texURL[slot]=url; refreshSlots();
+  });
+  stat.textContent=(SLOT_NAMES[slot]||slot)+": photo adjusted ("+W+"×"+H+") and applied.";
+};
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"&&edBox.style.display!=="none") edClose();
+});
 
 // ---- UI ----
 var view=document.getElementById("view"),vctx=view.getContext("2d");
